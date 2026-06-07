@@ -27,6 +27,7 @@ where not all files arrive together.
 
 import argparse
 import os
+import re
 import shutil
 import sys
 from collections import defaultdict
@@ -68,11 +69,74 @@ def _collect_files(raw_dir: str) -> list[str]:
     return files
 
 
-def _archive_file(filepath: str, proc_dir: str) -> None:
+def _shorten_filenames(raw_dir: str, max_total_path: int = 200) -> None:
+    """
+    Renames any .xlsx file in raw_dir whose full path exceeds max_total_path
+    characters. Windows has a 260-character path limit; files with long Workday
+    export names combined with a deep OneDrive folder path can hit this.
+
+    Renaming strategy:
+      1. Replace spaces with underscores
+      2. Strip the time portion from the Workday timestamp
+         e.g. '2026-06-01 05_00 EDT' -> '2026-06-01'
+      3. Remove trailing ' (1)', ' (2)' etc. duplicate suffixes
+      4. If the path is still too long, truncate the stem to fit
+
+    Only renames when necessary — files already within the limit are untouched.
+    Prints a line for each file renamed.
+    """
+    for fname in os.listdir(raw_dir):
+        if not fname.lower().endswith('.xlsx') or fname.startswith('~'):
+            continue
+
+        full_path = os.path.join(raw_dir, fname)
+        if len(full_path) <= max_total_path:
+            continue
+
+        stem = fname[:-5]  # strip .xlsx
+
+        # Remove duplicate suffix e.g. ' (1)', '(2)'
+        stem = re.sub(r'\s*\(\d+\)\s*$', '', stem)
+
+        # Collapse Workday timestamp: keep date, drop time and timezone
+        # e.g. '2026-06-01 05_00 EDT' -> '2026-06-01'
+        stem = re.sub(r'(\d{4}-\d{2}-\d{2})\s+\d{2}_\d{2}\s+\w+', r'\1', stem)
+
+        # Replace spaces with underscores
+        stem = stem.replace(' ', '_')
+
+        # Remove any double underscores left over
+        stem = re.sub(r'_+', '_', stem).strip('_')
+
+        new_name      = stem + '.xlsx'
+        new_full_path = os.path.join(raw_dir, new_name)
+
+        # If still too long, truncate the stem
+        max_stem_len = max_total_path - len(raw_dir) - len(os.sep) - len('.xlsx')
+        if len(stem) > max_stem_len:
+            stem     = stem[:max_stem_len]
+            new_name = stem + '.xlsx'
+            new_full_path = os.path.join(raw_dir, new_name)
+
+        # Don't rename if target already exists (avoid clobbering)
+        if new_full_path == full_path:
+            continue
+        if os.path.exists(new_full_path):
+            print(f"    [WARNING] Cannot rename '{fname}' -> '{new_name}': target already exists")
+            continue
+
+        os.rename(full_path, new_full_path)
+        print(f"    Renamed: {fname}")
+        print(f"         ->  {new_name}")
+
+
+
     """
     Moves a processed file to data/processed/ prefixed with today's date.
     e.g. SCD_Email_Roster_2026-06-07_... -> 2026-06-07_SCD_Email_Roster_...
     Handles name collisions by appending a counter.
+    If the move fails (e.g. Windows path-length limit), logs a warning and
+    leaves the file in place rather than crashing the run.
     """
     os.makedirs(proc_dir, exist_ok=True)
     basename  = os.path.basename(filepath)
@@ -86,7 +150,11 @@ def _archive_file(filepath: str, proc_dir: str) -> None:
         dest_path = os.path.join(proc_dir, f"{today}_{counter}_{basename}")
         counter  += 1
 
-    shutil.move(filepath, dest_path)
+    try:
+        shutil.move(filepath, dest_path)
+    except (OSError, shutil.Error) as e:
+        print(f"    [WARNING] Could not archive '{basename}': {e}")
+        print(f"    File remains in data/raw/ — move it manually or shorten the filename.")
 
 
 def _print_summary(results: dict) -> None:
@@ -136,6 +204,11 @@ def run(raw_dir: str, db_path: str, schema_path: str,
     if not all_files:
         print("\n  No .xlsx files found in raw folder. Nothing to do.")
         return
+
+    # Shorten any filenames whose full path exceeds Windows' path length limit
+    _shorten_filenames(raw_dir)
+    # Re-collect after potential renames
+    all_files = _collect_files(raw_dir)
 
     print(f"\n  Found {len(all_files)} file(s):")
     for f in all_files:

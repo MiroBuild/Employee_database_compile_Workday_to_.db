@@ -238,7 +238,7 @@ def resolve_term_roster_ids(
         ambiguous_keys.assign(_flag=True),
         on=COMPOSITE_KEY,
         how='left',
-    )['_flag'].fillna(False).values
+    )['_flag'].notna().values
 
     result.loc[ambiguous_mask, 'match_status'] = 'ambiguous'
     result.loc[result['employee_id'].notna(), 'match_status'] = 'matched'
