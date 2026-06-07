@@ -28,77 +28,82 @@ from datetime import datetime
 # Maps a filename pattern (substring match) to its ingestion config:
 #   skip_rows   : how many rows to skip before the header row
 #   reader      : which read function to call (defined below)
+#
+# Patterns are matched against a NORMALISED filename — lowercased with spaces
+# and underscores stripped — so both 'SCD_Full_Sail_Terminations_...' and
+# 'SCD Full Sail Terminations ...' match the same pattern. Patterns here
+# should also be normalised (lowercase, no spaces/underscores).
 # ---------------------------------------------------------------------------
 FILE_REGISTRY = [
     {
-        "pattern":  "SCD_Email_Roster",
+        "pattern":  "scdemailroster",
         "skip_rows": 1,
         "reader":   "read_email_roster",
     },
     {
-        "pattern":  "Years_of_Service",
+        "pattern":  "yearsofservice",
         "skip_rows": 1,
         "reader":   "read_years_of_service",
     },
     {
-        "pattern":  "Active_Manager_Roster",
+        "pattern":  "activemanagerroster",
         "skip_rows": 1,
         "reader":   "read_manager_roster",
     },
     {
-        "pattern":  "SCD_Full_Sail_New_Hire_Report",
+        "pattern":  "scdfullsailnewhirereport",
         "skip_rows": 3,
         "reader":   "read_new_hires",
     },
     {
-        "pattern":  "SCD_Full_Sail_Terminations_-_Staff_Development_Scholarship",
+        "pattern":  "scdfullsailterminationsstaffdevelopmentscholarship",
         "skip_rows": 5,
         "reader":   "read_staff_dev_scholarship",
     },
     {
-        "pattern":  "SCD_Full_Sail_Terminations_-_Family_Scholarship",
+        "pattern":  "scdfullsailterminationsfamilyscholarship",
         "skip_rows": 5,
         "reader":   "read_family_scholarship",
     },
     {
-        "pattern":  "SCD_Full_Sail_Terminations",
+        "pattern":  "scdfullsailterminations",
         "skip_rows": 5,
         "reader":   "read_terminations_scd",
     },
     {
-        "pattern":  "HCM_RPT_Monthly_Termination_Report",
+        "pattern":  "hcmrptmonthlyterminationreport",
         "skip_rows": 7,
         "reader":   "read_terminations_monthly",
     },
     {
-        "pattern":  "SCD_Term_Roster",
+        "pattern":  "scdtermroster",
         "skip_rows": 2,
         "reader":   "read_term_roster",
     },
     {
-        "pattern":  "HCM_RPT_Anytime_Feedback",
+        "pattern":  "hcmrptanytimefeedback",
         "skip_rows": 7,
         "reader":   "read_feedback",
     },
     {
-        "pattern":  "Source_to_Pipeline",
+        "pattern":  "sourcetopipeline",
         "skip_rows": 1,
         "reader":   "read_recruiting_pipeline",
     },
     {
-        "pattern":  "Headcount_by_Gender",
+        "pattern":  "headcountbygender",
         "skip_rows": 2,
         "reader":   "read_headcount_gender",
     },
     {
-        "pattern":  "Headcount_by_Birth_Year",
+        "pattern":  "headcountbybirthyear",
         "skip_rows": 2,
         "reader":   "read_headcount_birth_year",
     },
 ]
 
 # Note: order matters — more specific patterns (e.g. the two scholarship
-# files) must appear BEFORE the generic "SCD_Full_Sail_Terminations" entry,
+# files) must appear BEFORE the generic "scdfullsailterminations" entry,
 # otherwise the generic pattern will match them first.
 
 
@@ -182,11 +187,19 @@ def ingest(filepath: str) -> tuple[str, pd.DataFrame]:
     Main entry point. Matches the file to a registry entry, calls the
     appropriate reader, and returns (target_table_name, clean_dataframe).
 
+    Matching is done against a normalised filename — lowercased with spaces,
+    underscores, hyphens, and parentheses stripped — so files downloaded with
+    spaces ('SCD Full Sail Terminations') match the same pattern as files
+    exported with underscores ('SCD_Full_Sail_Terminations').
+
     Raises ValueError if the filename doesn't match any known pattern.
     """
     filename = os.path.basename(filepath)
+    # Normalise: lowercase, remove spaces/underscores/hyphens/parens/dots
+    normalised = re.sub(r'[\s_\-().]+', '', filename).lower()
+
     for entry in FILE_REGISTRY:
-        if entry["pattern"] in filename:
+        if entry["pattern"] in normalised:
             reader_fn = globals()[entry["reader"]]
             df = reader_fn(filepath, entry["skip_rows"])
             df = clean_strings(df)

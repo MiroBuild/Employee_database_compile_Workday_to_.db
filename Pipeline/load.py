@@ -176,6 +176,9 @@ def _stub_missing_employees(
 
     Returns the number of stub rows inserted.
     """
+    # Guard: if the id_col doesn't exist in the DataFrame at all, nothing to do
+    if id_col not in df.columns:
+        return 0
     named_ids = df[id_col].dropna().unique().tolist()
     if not named_ids:
         return 0

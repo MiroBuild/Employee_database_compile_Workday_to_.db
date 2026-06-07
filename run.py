@@ -191,24 +191,24 @@ def run(raw_dir: str, db_path: str, schema_path: str,
     )
 
     # Report transform diagnostics
+    import pandas as pd
     emp_df = transformed.get('employees')
-    if emp_df is not None and not emp_df.empty:
+    if isinstance(emp_df, pd.DataFrame) and len(emp_df) > 0:
         print(f"    employees merged       : {len(emp_df)} rows")
 
     dep_df = transformed.get('employee_departures')
-    if dep_df is not None and not dep_df.empty:
+    if isinstance(dep_df, pd.DataFrame) and len(dep_df) > 0:
         print(f"    departures detected    : {len(dep_df)} employees marked Terminated")
 
     term_frames = transformed.get('terminations', [])
-    if term_frames:
-        if isinstance(term_frames, list):
-            roster = next((df for df in term_frames if 'workday_id' in df.columns), None)
-            if roster is not None and 'match_status' in roster.columns:
-                matched   = (roster['match_status'] == 'matched').sum()
-                ambiguous = (roster['match_status'] == 'ambiguous').sum()
-                unmatched = (roster['match_status'] == 'unmatched').sum()
-                print(f"    term roster resolution : {matched} matched, "
-                      f"{ambiguous} ambiguous, {unmatched} unmatched")
+    if isinstance(term_frames, list) and len(term_frames) > 0:
+        roster = next((df for df in term_frames if 'workday_id' in df.columns), None)
+        if roster is not None and 'match_status' in roster.columns:
+            matched   = (roster['match_status'] == 'matched').sum()
+            ambiguous = (roster['match_status'] == 'ambiguous').sum()
+            unmatched = (roster['match_status'] == 'unmatched').sum()
+            print(f"    term roster resolution : {matched} matched, "
+                  f"{ambiguous} ambiguous, {unmatched} unmatched")
 
     if dry_run:
         print("\n  DRY RUN — no data written to database.")
