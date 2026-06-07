@@ -19,7 +19,7 @@
 --                 Employees absent from the new roster are marked 'Terminated'
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS employees (
-    employee_id             TEXT PRIMARY KEY,   -- source: Employee ID
+    employee_id             TEXT PRIMARY KEY,   -- source: Employee ID; stored as plain string to preserve leading zeros
 
     -- Identity (Email Roster)
     worker_status           TEXT,               -- Active / On Leave / Terminated
