@@ -479,8 +479,10 @@ def load_all(
                 # not stored in the DB
                 term_df = term_df.drop(columns=['match_status'], errors='ignore')
                 inserted, updated = load_terminations(conn, term_df)
+                # Log using actual DB counts (inserted + updated), not input row
+                # count — input includes duplicates across three source files
                 _log_entry(conn, source_filenames, 'terminations',
-                           len(term_df), inserted, updated, 0, 'success')
+                           inserted + updated, inserted, updated, 0, 'success')
 
             # 4. Append-with-dedup tables
             dedup_tables = [
