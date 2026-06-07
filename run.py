@@ -14,20 +14,19 @@ Usage
 What it does
 ------------
 1. Scans data/raw/ for .xlsx files
-2. Ingests each file into a clean DataFrame (pipeline/ingest.py)
-3. Groups DataFrames by target table and runs transforms (pipeline/transform.py)
-4. Writes to the SQLite database (pipeline/load.py)
-5. Prints a summary of what was inserted, updated, and skipped
-6. Moves processed files to data/processed/ with a timestamp prefix
+2. Renames files to short consistent names (handles Windows path length limits)
+3. Ingests each file into a clean DataFrame (pipeline/ingest.py)
+4. Groups DataFrames by target table and runs transforms (pipeline/transform.py)
+5. Writes to the SQLite database (pipeline/load.py)
+6. Prints a summary of what was inserted, updated, and skipped
+7. Moves processed files to data/processed/ with a date prefix
 
 Files that cannot be matched to a known pattern are skipped with a warning
-rather than aborting the entire run — this handles the variable weekly cadence
-where not all files arrive together.
+rather than aborting the entire run.
 """
 
 import argparse
 import os
-import re
 import shutil
 import sys
 from collections import defaultdict
@@ -45,10 +44,10 @@ from pipeline import ingest, transform, load
 # ---------------------------------------------------------------------------
 # PATHS  (relative to the project root; override via CLI args)
 # ---------------------------------------------------------------------------
-DEFAULT_RAW_DIR    = os.path.join(os.path.dirname(__file__), 'data', 'raw')
-DEFAULT_PROC_DIR   = os.path.join(os.path.dirname(__file__), 'data', 'processed')
-DEFAULT_DB_PATH    = os.path.join(os.path.dirname(__file__), 'db', 'employees.db')
-DEFAULT_SCHEMA     = os.path.join(os.path.dirname(__file__), 'sql', 'schema.sql')
+DEFAULT_RAW_DIR  = os.path.join(os.path.expanduser('~'), 'Downloads')
+DEFAULT_PROC_DIR = os.path.join(PROJECT_ROOT, 'data', 'processed')
+DEFAULT_DB_PATH  = os.path.join(PROJECT_ROOT, 'db', 'employees.db')
+DEFAULT_SCHEMA   = os.path.join(PROJECT_ROOT, 'sql', 'schema.sql')
 
 
 # ---------------------------------------------------------------------------
@@ -60,71 +59,17 @@ def _collect_files(raw_dir: str) -> list[str]:
     if not os.path.isdir(raw_dir):
         print(f"[ERROR] Raw folder not found: {raw_dir}")
         sys.exit(1)
-    files = sorted(
+    return sorted(
         os.path.join(raw_dir, f)
         for f in os.listdir(raw_dir)
         if f.lower().endswith('.xlsx') and not f.startswith('~')
-        # skip Excel temp files (start with ~)
     )
-    return files
 
 
-def _shorten_filenames(raw_dir: str) -> None:
-    """
-    Renames .xlsx files in raw_dir to remove the time portion and spaces
-    from Workday export filenames. Runs on every file unconditionally —
-    this avoids the Windows 260-char path limit without needing to calculate
-    exact path lengths, and keeps filenames consistent regardless of machine.
-
-    Renaming strategy:
-      1. Strip trailing ' (1)', ' (2)' duplicate suffixes
-      2. Strip the time + timezone portion from the Workday timestamp
-         e.g. '2026-06-01 05_00 EDT' -> '2026-06-01'
-      3. Replace spaces with underscores
-      4. Collapse any double underscores
-
-    Files whose name would not change are left untouched.
-    Files whose shortened name already exists are skipped with a warning.
-    """
-    for fname in os.listdir(raw_dir):
-        if not fname.lower().endswith('.xlsx') or fname.startswith('~'):
-            continue
-
-        stem = fname[:-5]  # strip .xlsx
-
-        # Remove duplicate suffix e.g. ' (1)', ' (2)'
-        stem = re.sub(r'\s*\(\d+\)\s*$', '', stem)
-
-        # Collapse Workday timestamp: keep date, drop time and timezone
-        # e.g. '2026-06-01 05_00 EDT' -> '2026-06-01'
-        stem = re.sub(r'(\d{4}-\d{2}-\d{2})\s+\d{2}_\d{2}\s+\w+', r'\1', stem)
-
-        # Replace spaces with underscores and collapse multiples
-        stem = stem.replace(' ', '_')
-        stem = re.sub(r'_+', '_', stem).strip('_')
-
-        new_name      = stem + '.xlsx'
-        full_path     = os.path.join(raw_dir, fname)
-        new_full_path = os.path.join(raw_dir, new_name)
-
-        if new_name == fname:
-            continue  # already clean, nothing to do
-
-        if os.path.exists(new_full_path):
-            print(f"    [WARNING] Cannot rename '{fname}' -> '{new_name}': target already exists")
-            continue
-
-        os.rename(full_path, new_full_path)
-        print(f"    Renamed: {fname}")
-        print(f"         ->  {new_name}")
-
-
+def _archive_file(filepath: str, proc_dir: str) -> None:
     """
     Moves a processed file to data/processed/ prefixed with today's date.
-    e.g. SCD_Email_Roster_2026-06-07_... -> 2026-06-07_SCD_Email_Roster_...
-    Handles name collisions by appending a counter.
-    If the move fails (e.g. Windows path-length limit), logs a warning and
-    leaves the file in place rather than crashing the run.
+    Uses the \\?\\ prefix on Windows to bypass the MAX_PATH limit.
     """
     os.makedirs(proc_dir, exist_ok=True)
     basename  = os.path.basename(filepath)
@@ -132,17 +77,16 @@ def _shorten_filenames(raw_dir: str) -> None:
     dest_name = f"{today}_{basename}"
     dest_path = os.path.join(proc_dir, dest_name)
 
-    # Avoid overwriting if same file was archived earlier today
     counter = 1
     while os.path.exists(dest_path):
         dest_path = os.path.join(proc_dir, f"{today}_{counter}_{basename}")
-        counter  += 1
+        counter += 1
 
     try:
-        shutil.move(filepath, dest_path)
+        shutil.move(_win_path(filepath), _win_path(dest_path))
     except (OSError, shutil.Error) as e:
         print(f"    [WARNING] Could not archive '{basename}': {e}")
-        print(f"    File remains in data/raw/ — move it manually or shorten the filename.")
+        print(f"    File remains in data/raw/")
 
 
 def _print_summary(results: dict) -> None:
@@ -151,8 +95,8 @@ def _print_summary(results: dict) -> None:
     print("  Pipeline run complete")
     print("=" * 60)
 
-    skipped   = results.get('skipped_files', [])
-    ingested  = results.get('ingested_files', [])
+    skipped  = results.get('skipped_files', [])
+    ingested = results.get('ingested_files', [])
     db_counts = results.get('db_counts', {})
 
     if skipped:
@@ -185,18 +129,16 @@ def run(raw_dir: str, db_path: str, schema_path: str,
 
     print(f"\n[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] Starting pipeline run")
     print(f"  Raw folder : {raw_dir}")
-    print(f"  Database   : {db_path}" if not dry_run else "  Mode       : DRY RUN (no DB writes)")
+    if dry_run:
+        print("  Mode       : DRY RUN (no DB writes)")
+    else:
+        print(f"  Database   : {db_path}")
 
     # --- 1. Collect files ---
     all_files = _collect_files(raw_dir)
     if not all_files:
         print("\n  No .xlsx files found in raw folder. Nothing to do.")
         return
-
-    # Shorten any filenames whose full path exceeds Windows' path length limit
-    _shorten_filenames(raw_dir)
-    # Re-collect after potential renames
-    all_files = _collect_files(raw_dir)
 
     print(f"\n  Found {len(all_files)} file(s):")
     for f in all_files:
@@ -218,11 +160,9 @@ def run(raw_dir: str, db_path: str, schema_path: str,
             ingested_files.append(filepath)
             print(f"    OK  {fname}  ->  {table}  ({len(df)} rows)")
         except ValueError as e:
-            # Unrecognised file pattern — skip, don't abort
             skipped_files.append(filepath)
             print(f"    --  {fname}  (skipped: {e})")
         except Exception as e:
-            # Unexpected read error — skip with warning
             skipped_files.append(filepath)
             print(f"    !!  {fname}  (error: {e})")
 
@@ -234,8 +174,6 @@ def run(raw_dir: str, db_path: str, schema_path: str,
     print("\n  Transforming...")
 
     if dry_run:
-        # In dry-run mode we still need the DB to fetch existing IDs,
-        # but only for the transform step — we won't write anything.
         existing_ids = []
         if os.path.exists(db_path):
             conn = load.get_connection(db_path)
@@ -247,9 +185,7 @@ def run(raw_dir: str, db_path: str, schema_path: str,
         load.initialise_db(conn, schema_path)
         existing_ids = load.get_existing_employee_ids(conn)
 
-    transformed = transform.transform_all(
-        dict(ingested_by_table), existing_ids
-    )
+    transformed = transform.transform_all(dict(ingested_by_table), existing_ids)
 
     # Report transform diagnostics
     import pandas as pd
@@ -273,10 +209,7 @@ def run(raw_dir: str, db_path: str, schema_path: str,
 
     if dry_run:
         print("\n  DRY RUN — no data written to database.")
-        _print_summary({
-            'skipped_files':  skipped_files,
-            'ingested_files': ingested_files,
-        })
+        _print_summary({'skipped_files': skipped_files, 'ingested_files': ingested_files})
         return
 
     # --- 4. Load ---
@@ -289,7 +222,7 @@ def run(raw_dir: str, db_path: str, schema_path: str,
         conn.close()
         sys.exit(1)
 
-    # Collect row counts for summary from pipeline_log
+    # Collect row counts from pipeline_log
     db_counts = {}
     log_rows = conn.execute("""
         SELECT target_table, SUM(rows_inserted), SUM(rows_updated), SUM(rows_skipped)
@@ -327,26 +260,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(
         description='Run the Workday -> SQLite employee database pipeline.'
     )
-    parser.add_argument(
-        '--raw', default=DEFAULT_RAW_DIR,
-        help=f'Folder containing raw .xlsx exports (default: {DEFAULT_RAW_DIR})'
-    )
-    parser.add_argument(
-        '--db', default=DEFAULT_DB_PATH,
-        help=f'Path to the SQLite database file (default: {DEFAULT_DB_PATH})'
-    )
-    parser.add_argument(
-        '--schema', default=DEFAULT_SCHEMA,
-        help=f'Path to schema.sql (default: {DEFAULT_SCHEMA})'
-    )
-    parser.add_argument(
-        '--processed', default=DEFAULT_PROC_DIR,
-        help=f'Folder to archive processed files (default: {DEFAULT_PROC_DIR})'
-    )
-    parser.add_argument(
-        '--dry-run', action='store_true',
-        help='Ingest and transform only — do not write to the database'
-    )
+    parser.add_argument('--raw',       default=DEFAULT_RAW_DIR)
+    parser.add_argument('--db',        default=DEFAULT_DB_PATH)
+    parser.add_argument('--schema',    default=DEFAULT_SCHEMA)
+    parser.add_argument('--processed', default=DEFAULT_PROC_DIR)
+    parser.add_argument('--dry-run',   action='store_true')
 
     args = parser.parse_args()
 
