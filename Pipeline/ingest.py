@@ -100,6 +100,11 @@ FILE_REGISTRY = [
         "skip_rows": 2,
         "reader":   "read_headcount_birth_year",
     },
+    {
+        "pattern":  "monthlyreport",
+        "skip_rows": 0,
+        "reader":   "read_scholarship_students",
+    },
 ]
 
 # Note: order matters — more specific patterns (e.g. the two scholarship
@@ -227,6 +232,7 @@ def _table_for_reader(reader_name: str) -> str:
         "read_recruiting_pipeline":    "recruiting_pipeline",
         "read_headcount_gender":       "agg_headcount_gender",
         "read_headcount_birth_year":   "agg_headcount_birth_year",
+        "read_scholarship_students":   "scholarship_students",
     }
     return mapping[reader_name]
 
@@ -650,3 +656,81 @@ def read_headcount_birth_year(filepath: str, skip_rows: int) -> pd.DataFrame:
     df['snapshot_date'] = report_date
 
     return df[['birth_year', 'count', 'snapshot_date']]
+
+
+def read_scholarship_students(filepath: str, skip_rows: int) -> pd.DataFrame:
+    """
+    Reads the monthly scholarship student report (Copy tab).
+    Each row is a student enrolled at Full Sail who is associated with an
+    employee via a scholarship (SDS, FSFS, or LAFS).
+    Column headers are in row 1 (skip_rows=0).
+    Employee ID is in column AB.
+    """
+    df = pd.read_excel(
+        filepath,
+        sheet_name='Copy',
+        header=0,
+        engine='openpyxl',
+        dtype=str,
+    )
+    report_date = extract_report_date(filepath)
+
+    df = df.rename(columns={
+        'StudentName':      'student_name',
+        'printID':          'print_id',
+        'email':            'student_email',
+        'otheremail':       'other_email',
+        'OriginalStartDate':'original_start_date',
+        'LeadDate':         'lead_date',
+        'ExpStartDate':     'expected_start_date',
+        'GradDate':         'grad_date',
+        'EnrollDate':       'enroll_date',
+        'ARBalance':        'ar_balance',
+        'SchoolStatus':     'school_status',
+        'ProgramGroup':     'program_group',
+        'DPA':              'dpa',
+        'ProgramVersion':   'program_version',
+        'ProgramCode':      'program_code',
+        'AdmRep':           'adm_rep',
+        'GPA':              'gpa',
+        'CurrentEnrollmentInfo': 'current_enrollment_info',
+        'Gender':           'gender',
+        'AdenrollID':       'aden_roll_id',
+        'Vet':              'vet',
+        'PreferredName':    'preferred_name',
+        'lu':               'lu',
+        'Withdrawal Date':  'withdrawal_date',
+        'Concat':           'concat',
+        'Active or Term?':  'active_or_termed',
+        'Term Date (if known)': 'term_date',
+        'MY Employee ID (All Sources) - Is employee associated if a FAFS': 'employee_id',
+        'Scholarship (per Miro)': 'scholarship_type',
+        'Employee Associated':    'employee_associated',
+        'Comments/Research':      'comments',
+        'Last Name':        'last_name',
+        'First Name':       'first_name',
+    })
+
+    df['employee_id'] = normalise_employee_id(df['employee_id'])
+    df['print_id']    = df['print_id'].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+
+    # Convert date columns
+    for col in ['original_start_date', 'lead_date', 'expected_start_date',
+                'grad_date', 'enroll_date', 'withdrawal_date', 'term_date']:
+        df[col] = to_iso_date(pd.to_datetime(df[col], errors='coerce'))
+
+    # Numeric columns
+    df['gpa']        = pd.to_numeric(df['gpa'],        errors='coerce')
+    df['ar_balance'] = pd.to_numeric(df['ar_balance'],  errors='coerce')
+
+    df['report_date'] = report_date
+
+    return df[[
+        'print_id', 'employee_id', 'student_name', 'last_name', 'first_name',
+        'preferred_name', 'student_email', 'other_email', 'scholarship_type',
+        'employee_associated', 'school_status', 'program_group', 'program_code',
+        'program_version', 'dpa', 'adm_rep', 'gpa', 'vet', 'ar_balance',
+        'original_start_date', 'lead_date', 'expected_start_date', 'enroll_date',
+        'grad_date', 'withdrawal_date', 'active_or_termed', 'term_date',
+        'current_enrollment_info', 'gender', 'comments', 'report_date',
+    ]]

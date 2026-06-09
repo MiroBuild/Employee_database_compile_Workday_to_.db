@@ -19,7 +19,7 @@
 --                 Employees absent from the new roster are marked 'Terminated'
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS employees (
-    employee_id             TEXT PRIMARY KEY,   -- source: Employee ID; stored as plain string to preserve leading zeros
+    employee_id             TEXT PRIMARY KEY,   -- source: Employee ID
 
     -- Identity (Email Roster)
     worker_status           TEXT,               -- Active / On Leave / Terminated
@@ -284,7 +284,50 @@ CREATE TABLE IF NOT EXISTS agg_headcount_birth_year (
 
 
 -- -----------------------------------------------------------------------------
--- PIPELINE LOG (housekeeping)
+-- SCHOLARSHIP STUDENTS (monthly snapshot)
+-- Source: Monthly Report (Copy tab)
+-- Tracks Full Sail employees and their family members enrolled as students
+-- under the Staff Development Scholarship (SDS), Family Scholarship (FSFS),
+-- or other scholarship types (LAFS etc.)
+-- Load behaviour: UPSERT on print_id — new students inserted, existing rows
+--                 fully updated to reflect latest status each month.
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS scholarship_students (
+    print_id                TEXT PRIMARY KEY,   -- student ID from school system
+    employee_id             TEXT REFERENCES employees(employee_id),
+    student_name            TEXT,               -- Last, First format
+    last_name               TEXT,
+    first_name              TEXT,
+    preferred_name          TEXT,
+    student_email           TEXT,
+    other_email             TEXT,
+    scholarship_type        TEXT,               -- SDS / FSFS / LAFS
+    employee_associated     TEXT,               -- name of sponsoring employee if FSFS
+    school_status           TEXT,               -- Graduate / Active / Drop / etc.
+    program_group           TEXT,               -- e.g. "Online Ed"
+    program_code            TEXT,               -- e.g. "CWRM01E-O"
+    program_version         TEXT,
+    dpa                     TEXT,               -- degree program advisor
+    adm_rep                 TEXT,               -- admissions rep
+    gpa                     REAL,
+    vet                     TEXT,               -- veteran flag
+    ar_balance              REAL,               -- accounts receivable balance
+    original_start_date     TEXT,               -- ISO date
+    lead_date               TEXT,               -- ISO date
+    expected_start_date     TEXT,               -- ISO date
+    enroll_date             TEXT,               -- ISO date
+    grad_date               TEXT,               -- ISO date
+    withdrawal_date         TEXT,               -- ISO date
+    active_or_termed        TEXT,               -- Active / Term'ed
+    term_date               TEXT,               -- ISO date if termed
+    current_enrollment_info TEXT,
+    gender                  TEXT,
+    comments                TEXT,
+    report_date             TEXT                -- ISO date from filename
+);
+
+
+
 -- Tracks every file ingested: when, what, how many rows, any errors
 -- Useful for debugging and for knowing whether this week's files have been run
 -- -----------------------------------------------------------------------------

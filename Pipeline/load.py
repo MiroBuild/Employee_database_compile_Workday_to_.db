@@ -385,6 +385,49 @@ def load_append(
     return len(records)
 
 
+def load_full_upsert(
+    conn: sqlite3.Connection,
+    table: str,
+    pk: str,
+    df: pd.DataFrame,
+) -> tuple[int, int]:
+    """
+    Full upsert: on conflict with the primary key, overwrite ALL columns
+    with the incoming values. Used for tables where each monthly file
+    represents the current state of each row (e.g. scholarship_students),
+    so stale values should be replaced rather than preserved.
+
+    Returns (rows_inserted, rows_updated).
+    """
+    if df.empty:
+        return 0, 0
+
+    cols         = list(df.columns)
+    col_list     = ', '.join(cols)
+    placeholders = ', '.join([f':{c}' for c in cols])
+
+    update_set = ', '.join(
+        f"{c} = excluded.{c}"
+        for c in cols if c != pk
+    )
+
+    sql = f"""
+        INSERT INTO {table} ({col_list})
+        VALUES ({placeholders})
+        ON CONFLICT({pk}) DO UPDATE SET
+        {update_set}
+    """
+
+    records = _df_to_records(df)
+    before  = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+    conn.executemany(sql, records)
+    after   = conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]
+
+    inserted = after - before
+    updated  = len(records) - inserted
+    return inserted, updated
+
+
 # ---------------------------------------------------------------------------
 # PIPELINE LOG
 # ---------------------------------------------------------------------------
@@ -507,6 +550,16 @@ def load_all(
                     inserted = load_append(conn, table, df)
                     _log_entry(conn, source_filenames, table,
                                len(df), inserted, 0, 0, 'success')
+
+            # 6. Full upsert tables (overwrite on PK conflict)
+            scholarship_df = transformed.get('scholarship_students', pd.DataFrame())
+            if isinstance(scholarship_df, pd.DataFrame) and len(scholarship_df) > 0:
+                _stub_missing_employees(conn, scholarship_df, id_col='employee_id')
+                inserted, updated = load_full_upsert(
+                    conn, 'scholarship_students', 'print_id', scholarship_df
+                )
+                _log_entry(conn, source_filenames, 'scholarship_students',
+                           len(scholarship_df), inserted, updated, 0, 'success')
 
     except Exception as e:
         # Transaction rolled back automatically by the context manager.
